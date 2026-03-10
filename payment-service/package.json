@@ -1,0 +1,29 @@
+{
+  "name": "payment-service",
+  "version": "1.0.0",
+  "description": "Payment Service – Node.js/Express microservice for payment processing and refunds",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "test": "jest --forceExit --detectOpenHandles",
+    "migrate": "node src/migrate.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "uuid": "^9.0.0",
+    "cors": "^2.8.5",
+    "morgan": "^1.10.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "nodemon": "^3.0.2"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
+  }
+}
