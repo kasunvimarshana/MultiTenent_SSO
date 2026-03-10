@@ -1,0 +1,239 @@
+version: '3.8'
+
+networks:
+  microservices_net:
+    driver: bridge
+
+volumes:
+  order_db_data:
+  inventory_db_data:
+  payment_db_data:
+  notification_db_data:
+  redis_data:
+
+services:
+
+  # ─────────────────────────────────────────────
+  # API GATEWAY  (Nginx reverse-proxy)
+  # ─────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:80"
+    depends_on:
+      - order-service
+      - inventory-service
+      - payment-service
+      - notification-service
+    networks:
+      - microservices_net
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # ORDER SERVICE  (Laravel / PHP 8.2)
+  # ─────────────────────────────────────────────
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    ports:
+      - "8001:8000"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DB_CONNECTION: mysql
+      DB_HOST: order-db
+      DB_PORT: 3306
+      DB_DATABASE: orders_db
+      DB_USERNAME: order_user
+      DB_PASSWORD: order_pass
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:3000
+      NOTIFICATION_SERVICE_URL: http://notification-service:5000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: redis
+    depends_on:
+      order-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - microservices_net
+    restart: unless-stopped
+    # Horizontal scaling: `docker-compose up --scale order-service=3`
+
+  order-db:
+    image: mysql:8.0
+    container_name: order-db
+    environment:
+      MYSQL_DATABASE: orders_db
+      MYSQL_USER: order_user
+      MYSQL_PASSWORD: order_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+    volumes:
+      - order_db_data:/var/lib/mysql
+    networks:
+      - microservices_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-worker:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-worker
+    command: php artisan queue:work --tries=3
+    environment:
+      APP_ENV: local
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DB_CONNECTION: mysql
+      DB_HOST: order-db
+      DB_PORT: 3306
+      DB_DATABASE: orders_db
+      DB_USERNAME: order_user
+      DB_PASSWORD: order_pass
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:3000
+      NOTIFICATION_SERVICE_URL: http://notification-service:5000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QUEUE_CONNECTION: redis
+    depends_on:
+      - order-service
+      - redis
+    networks:
+      - microservices_net
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # INVENTORY SERVICE  (Laravel / PHP 8.2)
+  # ─────────────────────────────────────────────
+  inventory-service:
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile
+    container_name: inventory-service
+    ports:
+      - "8002:8000"
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_KEY: base64:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+      DB_CONNECTION: pgsql
+      DB_HOST: inventory-db
+      DB_PORT: 5432
+      DB_DATABASE: inventory_db
+      DB_USERNAME: inv_user
+      DB_PASSWORD: inv_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    networks:
+      - microservices_net
+    restart: unless-stopped
+
+  inventory-db:
+    image: postgres:15-alpine
+    container_name: inventory-db
+    environment:
+      POSTGRES_DB: inventory_db
+      POSTGRES_USER: inv_user
+      POSTGRES_PASSWORD: inv_pass
+    volumes:
+      - inventory_db_data:/var/lib/postgresql/data
+    networks:
+      - microservices_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inv_user -d inventory_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # PAYMENT SERVICE  (Node.js / Express)
+  # ─────────────────────────────────────────────
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: payment-service
+    ports:
+      - "8003:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DB_HOST: payment-db
+      DB_PORT: 5432
+      DB_NAME: payments_db
+      DB_USER: pay_user
+      DB_PASS: pay_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      payment-db:
+        condition: service_healthy
+    networks:
+      - microservices_net
+    restart: unless-stopped
+
+  payment-db:
+    image: postgres:15-alpine
+    container_name: payment-db
+    environment:
+      POSTGRES_DB: payments_db
+      POSTGRES_USER: pay_user
+      POSTGRES_PASSWORD: pay_pass
+    volumes:
+      - payment_db_data:/var/lib/postgresql/data
+    networks:
+      - microservices_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pay_user -d payments_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # NOTIFICATION SERVICE  (Python / Flask)
+  # ─────────────────────────────────────────────
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    ports:
+      - "8004:5000"
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: sqlite:////app/notifications.db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - microservices_net
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # SHARED INFRASTRUCTURE
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - microservices_net
+    restart: unless-stopped
